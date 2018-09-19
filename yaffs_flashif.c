@@ -77,7 +77,7 @@ static int deinitialise(struct yaffs_dev *dev)
     return YAFFS_OK;
 }
 
-static void yaffs_mtd_drv_install(struct yaffs_dev *dev)
+void yaffs_mtd_drv_install(struct yaffs_dev *dev)
 {
     dev->drv.drv_deinitialise_fn = deinitialise;
     dev->drv.drv_initialise_fn   = initialise;
