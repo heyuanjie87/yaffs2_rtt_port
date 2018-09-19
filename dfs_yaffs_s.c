@@ -3,7 +3,7 @@
 #include <dfs_file.h>
 
 #include "yaffs/yaffs_guts.h"
-
+#include "yaffs/direct/yaffsfs.h"
 
 static int dfs_yfile_open(struct dfs_fd *file)
 {
@@ -196,8 +196,6 @@ static int dfs_yaffs_mount(struct dfs_filesystem *fs, unsigned long rwflag, cons
     rt_mtd_t *mtd;
     struct yaffs_dev *dev;
     int ret;
-    extern int yaffs_mount_common(struct yaffs_dev *dev, const YCHAR *path,
-                                  int read_only, int skip_checkpt);
 
     if (fs->dev_id->type != RT_Device_Class_MTD)
         return -1;
@@ -209,7 +207,7 @@ static int dfs_yaffs_mount(struct dfs_filesystem *fs, unsigned long rwflag, cons
         return -1;
 
     dev = (struct yaffs_dev *)mtd->priv;
-    ret = yaffs_mount_common(dev, 0, 0, 0);
+    ret = yaffs_mount_reldev(dev);
     if (ret == 0)
     {
         fs->data = dev->root_dir;
@@ -222,12 +220,11 @@ static int dfs_yaffs_unmount(struct dfs_filesystem *fs)
 {
     rt_mtd_t *mtd;
     struct yaffs_dev *dev;
-    extern int yaffs_unmount2_common(struct yaffs_dev *dev, const YCHAR *path, int force);
 
     mtd = (rt_mtd_t*)fs->dev_id;
     dev = (struct yaffs_dev *)mtd->priv;
 
-    if (yaffs_unmount2_common(dev, fs->path, 0) < 0)
+    if (yaffs_unmount_reldev(dev) < 0)
         return yaffsfs_GetLastError();
 
     return -ENOENT;
@@ -237,11 +234,10 @@ static int dfs_yaffs_mkfs(rt_device_t dev_id)
 {
     rt_mtd_t *mtd;
     struct yaffs_dev *dev;
-    extern int yaffs_format_common(struct yaffs_dev *dev,
-                                   const YCHAR *path,
-                                   int unmount_flag,
-                                   int force_unmount_flag,
-                                   int remount_flag);
+	extern int yaffs_format_reldev(struct yaffs_dev *dev,
+		                           int unmount_flag,
+		                           int force_unmount_flag,
+		                           int remount_flag);
 
     if (dev_id->type != RT_Device_Class_MTD)
         return -1;
@@ -254,19 +250,18 @@ static int dfs_yaffs_mkfs(rt_device_t dev_id)
 
     dev = (struct yaffs_dev *)mtd->priv;
 
-    return yaffs_format_common(dev, 0, 0, 0, 0);
+    return yaffs_format_reldev(dev, 0, 0, 0);
 }
 
 static int dfs_yaffs_statfs(struct dfs_filesystem *fs, struct statfs *buf)
 {
     rt_mtd_t * mtd = (rt_mtd_t *)fs->dev_id;
-    extern Y_LOFF_T yaffs_freespace_common(struct yaffs_dev *dev, const YCHAR *path);
 
     RT_ASSERT(mtd != RT_NULL);
 
     buf->f_bsize = mtd->sector_size;
     buf->f_blocks = mtd->size/ mtd->sector_size;
-    buf->f_bfree = yaffs_freespace_common(mtd->priv, fs->path) / mtd->sector_size;
+    buf->f_bfree = yaffs_freespace_reldev(mtd->priv) / mtd->sector_size;
 
     return 0;
 }
