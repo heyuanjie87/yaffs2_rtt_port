@@ -234,7 +234,7 @@ static int dfs_yaffs_mkfs(rt_device_t dev_id)
 {
     rt_mtd_t *mtd;
     struct yaffs_dev *dev;
-	extern int yaffs_format_reldev(struct yaffs_dev *dev,
+    extern int yaffs_format_reldev(struct yaffs_dev *dev,
 		                           int unmount_flag,
 		                           int force_unmount_flag,
 		                           int remount_flag);
@@ -250,7 +250,7 @@ static int dfs_yaffs_mkfs(rt_device_t dev_id)
 
     dev = (struct yaffs_dev *)mtd->priv;
 
-    return yaffs_format_reldev(dev, 0, 0, 0);
+    return yaffs_format_reldev(dev, 1, 1, 1);
 }
 
 static int dfs_yaffs_statfs(struct dfs_filesystem *fs, struct statfs *buf)
