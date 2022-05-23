@@ -1943,17 +1943,21 @@ static int yaffsfs_DoUtime(struct yaffs_obj *obj,
 	}
 
 #if !CONFIG_YAFFS_WINCE
+	// if the the buffer is null then create one with the fields set to the current time.
 	if (!buf) {
 		local.actime = Y_CURRENT_TIME;
 		local.modtime = local.actime;
 		buf = &local;
 	}
 
+	// copy the buffer's time into the obj.
 	if (obj) {
 		int result;
 
 		obj->yst_atime = buf->actime;
 		obj->yst_mtime = buf->modtime;
+
+		// set the obj to dirty to cause it to be written to flash during the next flush operation.
 		obj->dirty = 1;
 		result = yaffs_flush_file(obj, 0, 0, 0);
 		retVal = result == YAFFS_OK ? 0 : -1;
@@ -3050,6 +3054,7 @@ int yaffs_remount_common(struct yaffs_dev *dev, const YCHAR *path,
 		       int force, int read_only)
 {
 	int retVal = -1;
+	int was_read_only;
 
 	if (yaffsfs_CheckMemRegion(path, 0, 0) < 0) {
 		yaffsfs_SetError(-EFAULT);
@@ -3072,7 +3077,11 @@ int yaffs_remount_common(struct yaffs_dev *dev, const YCHAR *path,
 			if (force || !yaffsfs_IsDevBusy(dev)) {
 				if (read_only)
 					yaffs_checkpoint_save(dev);
+				was_read_only = dev->read_only;
 				dev->read_only = read_only ? 1 : 0;
+				if (was_read_only && !read_only) {
+					yaffs_guts_cleanup(dev);
+				}
 				retVal = 0;
 			} else
 				yaffsfs_SetError(-EBUSY);

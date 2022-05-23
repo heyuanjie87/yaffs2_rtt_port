@@ -69,16 +69,16 @@ struct yaffs_stat {
 	unsigned long	yst_wince_mtime[2];
 	unsigned long	yst_wince_ctime[2];
 #else
-	unsigned long	yst_atime;	/* time of last access */
-	unsigned long	yst_mtime;	/* time of last modification */
-	unsigned long	yst_ctime;	/* time of last change */
+	YTIME_T yst_atime;	/* time of last access */
+	YTIME_T yst_mtime;	/* time of last modification */
+	YTIME_T yst_ctime;	/* time of last change */
 #endif
 };
 
 
 struct yaffs_utimbuf {
-	unsigned long actime;
-	unsigned long modtime;
+	YTIME_T actime;
+	YTIME_T modtime;
 };
 
 /* Normal POSIX-style API functions */
@@ -320,7 +320,7 @@ int yaffs_open_sharing(const YCHAR *path, int oflag, int mode, int shareMode);
 struct yaffs_dev;
 void yaffs_add_device(struct yaffs_dev *dev);
 
-int yaffs_start_up(void);
+int yaffs_start_up(struct rt_mtd_nand_device* psMtdNandDev, const char* pcMountingPath);
 int yaffsfs_GetLastError(void);
 
 /* Functions to iterate through devices. NB Use with extreme care! */
