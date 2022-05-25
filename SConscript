@@ -10,7 +10,7 @@ direct = Glob('yaffs/direct/*.c')
 
 src = src + comm + direct
 
-depend = ['RT_USING_DFS', 'RT_USING_MTD', 'PKG_USING_DFS_YAFFS']
+depend = ['RT_USING_DFS', 'RT_USING_MTD_NAND', 'PKG_USING_DFS_YAFFS']
 CPPPATH = [cwd + '/yaffs', cwd + '/yaffs/direct']
 
 group = DefineGroup('yaffs', src , depend = depend, CPPPATH = CPPPATH)

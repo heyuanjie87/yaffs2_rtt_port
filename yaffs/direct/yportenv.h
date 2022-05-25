@@ -19,10 +19,15 @@
 #include <rtthread.h>
 #include <rtdevice.h>
 
-#define CONFIG_YAFFS_DEFINES_TYPES
-#define CONFIG_YAFFS_DIRECT
-#define CONFIG_YAFFS_PROVIDE_DEFS
-#define CONFIG_YAFFSFS_PROVIDE_VALUES
+#define CONFIG_YAFFS_DIRECT 1
+#define CONFIG_YAFFS_SHORT_NAMES_IN_RAM 1
+#define CONFIG_YAFFS_YAFFS2 1
+#define CONFIG_YAFFS_PROVIDE_DEFS 1
+#define CONFIG_YAFFSFS_PROVIDE_VALUES 1
+#define CONFIG_YAFFS_DEFINES_TYPES 1
+#define CONFIG_YAFFS_USE_32_BIT_TIME_T 1
+#define NO_Y_INLINE 1
+#define loff_t off_t
 
 #ifndef dev_t
 #define dev_t void*
@@ -41,12 +46,18 @@ typedef signed int s32;
 /* File types */
 
 
-//#define DT_UNKNOWN	0
+#ifndef DT_UNKNOWN
+    #define DT_UNKNOWN	0
+#endif
 #define DT_FIFO		1
 #define DT_CHR		2
-//#define DT_DIR		4
+#ifndef DT_DIR
+    #define DT_DIR		4
+#endif
 #define DT_BLK		6
-//#define DT_REG		8
+#ifndef DT_REG
+    #define DT_REG		8
+#endif
 #define DT_LNK		10
 #define DT_SOCK		12
 #define DT_WHT		14

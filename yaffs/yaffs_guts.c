@@ -14,6 +14,8 @@
 #include "yaffs_trace.h"
 
 #include "yaffs_guts.h"
+
+#include "yaffs_cache.h"
 #include "yaffs_endian.h"
 #include "yaffs_getblockinfo.h"
 #include "yaffs_tagscompat.h"
@@ -37,9 +39,6 @@
 #include "yaffs_ecc.h"
 
 /* Forward declarations */
-
-static int yaffs_wr_data_obj(struct yaffs_obj *in, int inode_chunk,
-			     const u8 *buffer, int n_bytes, int use_reserve);
 
 static void yaffs_fix_null_name(struct yaffs_obj *obj, YCHAR *name,
 				int buffer_size);
@@ -164,6 +163,8 @@ u8 *yaffs_get_temp_buffer(struct yaffs_dev * dev)
 
 }
 
+/* Frees all the temp_buffer objects in the yaffs_dev instance
+*/
 void yaffs_release_temp_buffer(struct yaffs_dev *dev, u8 *buffer)
 {
 	int i;
@@ -1422,237 +1423,6 @@ static int yaffs_change_obj_name(struct yaffs_obj *obj,
 	return YAFFS_FAIL;
 }
 
-/*------------------------ Short Operations Cache ------------------------------
- *   In many situations where there is no high level buffering  a lot of
- *   reads might be short sequential reads, and a lot of writes may be short
- *   sequential writes. eg. scanning/writing a jpeg file.
- *   In these cases, a short read/write cache can provide a huge perfomance
- *   benefit with dumb-as-a-rock code.
- *   In Linux, the page cache provides read buffering and the short op cache
- *   provides write buffering.
- *
- *   There are a small number (~10) of cache chunks per device so that we don't
- *   need a very intelligent search.
- */
-
-static int yaffs_obj_cache_dirty(struct yaffs_obj *obj)
-{
-	struct yaffs_dev *dev = obj->my_dev;
-	int i;
-	struct yaffs_cache *cache;
-	int n_caches = obj->my_dev->param.n_caches;
-
-	for (i = 0; i < n_caches; i++) {
-		cache = &dev->cache[i];
-		if (cache->object == obj && cache->dirty)
-			return 1;
-	}
-
-	return 0;
-}
-
-static void yaffs_flush_single_cache(struct yaffs_cache *cache, int discard)
-{
-
-	if (!cache || cache->locked)
-		return;
-
-	/* Write it out and free it up  if need be.*/
-	if (cache->dirty) {
-		yaffs_wr_data_obj(cache->object,
-				  cache->chunk_id,
-				  cache->data,
-				  cache->n_bytes,
-				  1);
-
-		cache->dirty = 0;
-	}
-
-	if (discard)
-		cache->object = NULL;
-}
-
-static void yaffs_flush_file_cache(struct yaffs_obj *obj, int discard)
-{
-	struct yaffs_dev *dev = obj->my_dev;
-	int i;
-	struct yaffs_cache *cache;
-	int n_caches = obj->my_dev->param.n_caches;
-
-	if (n_caches < 1)
-		return;
-
-
-	/* Find the chunks for this object and flush them. */
-	for (i = 0; i < n_caches; i++) {
-		cache = &dev->cache[i];
-		if (cache->object == obj)
-			yaffs_flush_single_cache(cache, discard);
-	}
-
-}
-
-
-void yaffs_flush_whole_cache(struct yaffs_dev *dev, int discard)
-{
-	struct yaffs_obj *obj;
-	int n_caches = dev->param.n_caches;
-	int i;
-
-	/* Find a dirty object in the cache and flush it...
-	 * until there are no further dirty objects.
-	 */
-	do {
-		obj = NULL;
-		for (i = 0; i < n_caches && !obj; i++) {
-			if (dev->cache[i].object && dev->cache[i].dirty)
-				obj = dev->cache[i].object;
-		}
-		if (obj)
-			yaffs_flush_file_cache(obj, discard);
-	} while (obj);
-
-}
-
-/* Grab us an unused cache chunk for use.
- * First look for an empty one.
- * Then look for the least recently used non-dirty one.
- * Then look for the least recently used dirty one...., flush and look again.
- */
-static struct yaffs_cache *yaffs_grab_chunk_worker(struct yaffs_dev *dev)
-{
-	u32 i;
-
-	if (dev->param.n_caches > 0) {
-		for (i = 0; i < dev->param.n_caches; i++) {
-			if (!dev->cache[i].object)
-				return &dev->cache[i];
-		}
-	}
-
-	return NULL;
-}
-
-static struct yaffs_cache *yaffs_grab_chunk_cache(struct yaffs_dev *dev)
-{
-	struct yaffs_cache *cache;
-	int usage;
-	u32 i;
-
-	if (dev->param.n_caches < 1)
-		return NULL;
-
-	/* First look for an unused cache */
-
-	cache = yaffs_grab_chunk_worker(dev);
-
-	if (cache)
-		return cache;
-
-	/*
-	 * Thery were all in use.
-	 * Find the LRU cache and flush it if it is dirty.
-	 */
-
-	usage = -1;
-	cache = NULL;
-
-	for (i = 0; i < dev->param.n_caches; i++) {
-		if (dev->cache[i].object &&
-		    !dev->cache[i].locked &&
-		    (dev->cache[i].last_use < usage || !cache)) {
-				usage = dev->cache[i].last_use;
-				cache = &dev->cache[i];
-		}
-	}
-
-#if 1
-	yaffs_flush_single_cache(cache, 1);
-#else
-	yaffs_flush_file_cache(cache->object, 1);
-	cache = yaffs_grab_chunk_worker(dev);
-#endif
-
-	return cache;
-}
-
-/* Find a cached chunk */
-static struct yaffs_cache *yaffs_find_chunk_cache(const struct yaffs_obj *obj,
-						  int chunk_id)
-{
-	struct yaffs_dev *dev = obj->my_dev;
-	u32 i;
-
-	if (dev->param.n_caches < 1)
-		return NULL;
-
-	for (i = 0; i < dev->param.n_caches; i++) {
-		if (dev->cache[i].object == obj &&
-		    dev->cache[i].chunk_id == chunk_id) {
-			dev->cache_hits++;
-
-			return &dev->cache[i];
-		}
-	}
-	return NULL;
-}
-
-/* Mark the chunk for the least recently used algorithym */
-static void yaffs_use_cache(struct yaffs_dev *dev, struct yaffs_cache *cache,
-			    int is_write)
-{
-	u32 i;
-
-	if (dev->param.n_caches < 1)
-		return;
-
-	if (dev->cache_last_use < 0 ||
-		dev->cache_last_use > 100000000) {
-		/* Reset the cache usages */
-		for (i = 1; i < dev->param.n_caches; i++)
-			dev->cache[i].last_use = 0;
-
-		dev->cache_last_use = 0;
-	}
-	dev->cache_last_use++;
-	cache->last_use = dev->cache_last_use;
-
-	if (is_write)
-		cache->dirty = 1;
-}
-
-/* Invalidate a single cache page.
- * Do this when a whole page gets written,
- * ie the short cache for this page is no longer valid.
- */
-static void yaffs_invalidate_chunk_cache(struct yaffs_obj *object, int chunk_id)
-{
-	struct yaffs_cache *cache;
-
-	if (object->my_dev->param.n_caches > 0) {
-		cache = yaffs_find_chunk_cache(object, chunk_id);
-
-		if (cache)
-			cache->object = NULL;
-	}
-}
-
-/* Invalidate all the cache pages associated with this object
- * Do this whenever ther file is deleted or resized.
- */
-static void yaffs_invalidate_whole_cache(struct yaffs_obj *in)
-{
-	u32 i;
-	struct yaffs_dev *dev = in->my_dev;
-
-	if (dev->param.n_caches > 0) {
-		/* Invalidate it. */
-		for (i = 0; i < dev->param.n_caches; i++) {
-			if (dev->cache[i].object == in)
-				dev->cache[i].object = NULL;
-		}
-	}
-}
 
 static void yaffs_unhash_obj(struct yaffs_obj *obj)
 {
@@ -1708,7 +1478,7 @@ void yaffs_handle_defered_free(struct yaffs_obj *obj)
 static int yaffs_generic_obj_del(struct yaffs_obj *in)
 {
 	/* Iinvalidate the file's data in the cache, without flushing. */
-	yaffs_invalidate_whole_cache(in);
+	yaffs_invalidate_file_cache(in);
 
 	if (in->my_dev->param.is_yaffs2 && in->parent != in->my_dev->del_dir) {
 		/* Move to unlinked directory so we have a deletion record */
@@ -2701,7 +2471,9 @@ static unsigned yaffs_find_gc_block(struct yaffs_dev *dev,
 	int prioritised = 0;
 	int prioritised_exist = 0;
 	struct yaffs_block_info *bi;
-	u32 threshold;
+	u32 threshold = dev->param.chunks_per_block;
+
+	(void) prioritised;
 
 	/* First let's see if we need to grab a prioritised block */
 	if (dev->has_pending_prioritised_gc && !aggressive) {
@@ -2957,6 +2729,7 @@ int yaffs_bg_gc(struct yaffs_dev *dev, unsigned urgency)
 {
 	int erased_chunks = dev->n_erased_blocks * dev->param.chunks_per_block;
 
+	(void) urgency;
 	yaffs_trace(YAFFS_TRACE_BACKGROUND, "Background gc %u", urgency);
 
 	yaffs_check_gc(dev, 1);
@@ -2991,6 +2764,7 @@ void yaffs_chunk_del(struct yaffs_dev *dev, int chunk_id, int mark_flash,
 	struct yaffs_ext_tags tags;
 	struct yaffs_block_info *bi;
 
+	(void) lyn;
 	if (chunk_id <= 0)
 		return;
 
@@ -3041,8 +2815,8 @@ void yaffs_chunk_del(struct yaffs_dev *dev, int chunk_id, int mark_flash,
 	}
 }
 
-static int yaffs_wr_data_obj(struct yaffs_obj *in, int inode_chunk,
-			     const u8 *buffer, int n_bytes, int use_reserve)
+int yaffs_wr_data_obj(struct yaffs_obj *in, int inode_chunk,
+			const u8 *buffer, int n_bytes, int use_reserve)
 {
 	/* Find old chunk Need to do this to get serial number
 	 * Write new one and patch into tree.
@@ -3245,8 +3019,10 @@ static void yaffs_check_obj_details_loaded(struct yaffs_obj *in)
 
 	result = yaffs_rd_chunk_tags_nand(dev, in->hdr_chunk, buf, &tags);
 
-	if (result == YAFFS_FAIL)
+	if (result == YAFFS_FAIL) {
+		yaffs_release_temp_buffer(dev, buf);
 		return;
+	}
 
 	oh = (struct yaffs_obj_hdr *)buf;
 
@@ -3428,7 +3204,6 @@ int yaffs_update_oh(struct yaffs_obj *in, const YCHAR *name, int force,
 					  in->my_dev->param.chunks_per_block);
 		bi->has_shrink_hdr = 1;
 	}
-
 
 	return new_chunk_id;
 }
@@ -3791,7 +3566,7 @@ int yaffs_resize_file(struct yaffs_obj *in, loff_t new_size)
 	loff_t old_size = in->variant.file_variant.file_size;
 
 	yaffs_flush_file_cache(in, 1);
-	yaffs_invalidate_whole_cache(in);
+	yaffs_invalidate_file_cache(in);
 
 	yaffs_check_gc(dev, 0);
 
@@ -4534,13 +4309,11 @@ int yaffs_get_obj_name(struct yaffs_obj *obj, YCHAR *name, int buffer_size)
 
 		if (obj->hdr_chunk > 0) {
 			result = yaffs_rd_chunk_tags_nand(obj->my_dev,
-							  obj->hdr_chunk,
-							  buffer, NULL);
+				obj->hdr_chunk, buffer, NULL);
+			if (result == YAFFS_OK)
+				yaffs_load_name_from_oh(obj->my_dev, name,
+					oh->name, buffer_size);
 		}
-		if (result == YAFFS_OK)
-			yaffs_load_name_from_oh(obj->my_dev, name, oh->name,
-					buffer_size);
-
 		yaffs_release_temp_buffer(obj->my_dev, buffer);
 	}
 
@@ -4771,10 +4544,15 @@ int yaffs_guts_ll_init(struct yaffs_dev *dev)
 		return YAFFS_FAIL;
 	}
 
+	if (!yaffs_init_tmp_buffers(dev))
+		return YAFFS_FAIL;
+
 	if (yaffs_init_nand(dev) != YAFFS_OK) {
 		yaffs_trace(YAFFS_TRACE_ALWAYS, "InitialiseNAND failed");
 		return YAFFS_FAIL;
 	}
+
+	dev->ll_init = 1;
 
 	return YAFFS_OK;
 }
@@ -4801,6 +4579,18 @@ int yaffs_guts_format_dev(struct yaffs_dev *dev)
 	return YAFFS_OK;
 }
 
+/*
+ * If the dev is mounted r/w then the cleanup will happen during
+ * yaffs_guts_initialise. However if the dev is mounted ro then
+ * the cleanup will be dfered until yaffs is remounted r/w.
+ */
+void yaffs_guts_cleanup(struct yaffs_dev *dev)
+{
+	yaffs_strip_deleted_objs(dev);
+	yaffs_fix_hanging_objs(dev);
+	if (dev->param.empty_lost_n_found)
+			yaffs_empty_l_n_f(dev);
+}
 
 int yaffs_guts_initialise(struct yaffs_dev *dev)
 {
@@ -4910,41 +4700,11 @@ int yaffs_guts_initialise(struct yaffs_dev *dev)
 
 	yaffs_endian_config(dev);
 
-	/* Initialise temporary buffers and caches. */
-	if (!yaffs_init_tmp_buffers(dev))
-		init_failed = 1;
-
-	dev->cache = NULL;
+	/* Initialise temporary caches. */
 	dev->gc_cleanup_list = NULL;
 
-	if (!init_failed && dev->param.n_caches > 0) {
-		u32 i;
-		void *buf;
-		u32 cache_bytes =
-		    dev->param.n_caches * sizeof(struct yaffs_cache);
-
-		if (dev->param.n_caches > YAFFS_MAX_SHORT_OP_CACHES)
-			dev->param.n_caches = YAFFS_MAX_SHORT_OP_CACHES;
-
-		dev->cache = kmalloc(cache_bytes, GFP_NOFS);
-
-		buf = (u8 *) dev->cache;
-
-		if (dev->cache)
-			memset(dev->cache, 0, cache_bytes);
-
-		for (i = 0; i < dev->param.n_caches && buf; i++) {
-			dev->cache[i].object = NULL;
-			dev->cache[i].last_use = 0;
-			dev->cache[i].dirty = 0;
-			dev->cache[i].data = buf =
-			    kmalloc(dev->param.total_bytes_per_chunk, GFP_NOFS);
-		}
-		if (!buf)
-			init_failed = 1;
-
-		dev->cache_last_use = 0;
-	}
+	if (!init_failed)
+		init_failed = yaffs_cache_init(dev) < 0;
 
 	dev->cache_hits = 0;
 
@@ -5014,10 +4774,7 @@ int yaffs_guts_initialise(struct yaffs_dev *dev)
 			init_failed = 1;
 		}
 
-		yaffs_strip_deleted_objs(dev);
-		yaffs_fix_hanging_objs(dev);
-		if (dev->param.empty_lost_n_found)
-			yaffs_empty_l_n_f(dev);
+		yaffs_guts_cleanup(dev);
 	}
 
 	if (init_failed) {
@@ -5058,17 +4815,7 @@ void yaffs_deinitialise(struct yaffs_dev *dev)
 		yaffs_deinit_blocks(dev);
 		yaffs_deinit_tnodes_and_objs(dev);
 		yaffs_summary_deinit(dev);
-
-		if (dev->param.n_caches > 0 && dev->cache) {
-
-			for (i = 0; i < dev->param.n_caches; i++) {
-				kfree(dev->cache[i].data);
-				dev->cache[i].data = NULL;
-			}
-
-			kfree(dev->cache);
-			dev->cache = NULL;
-		}
+		yaffs_cache_deinit(dev);
 
 		kfree(dev->gc_cleanup_list);
 
@@ -5082,6 +4829,7 @@ void yaffs_deinitialise(struct yaffs_dev *dev)
 		kfree(dev->checkpt_block_list);
 		dev->checkpt_block_list = NULL;
 
+		dev->ll_init = 0;
 		dev->is_mounted = 0;
 
 		yaffs_deinit_nand(dev);
@@ -5119,18 +4867,12 @@ int yaffs_get_n_free_chunks(struct yaffs_dev *dev)
 	int n_free;
 	int n_dirty_caches;
 	int blocks_for_checkpt;
-	u32 i;
 
 	n_free = dev->n_free_chunks;
 	n_free += dev->n_deleted_files;
 
 	/* Now count and subtract the number of dirty chunks in the cache. */
-
-	for (n_dirty_caches = 0, i = 0; i < dev->param.n_caches; i++) {
-		if (dev->cache[i].dirty)
-			n_dirty_caches++;
-	}
-
+	n_dirty_caches = yaffs_count_dirty_caches(dev);
 	n_free -= n_dirty_caches;
 
 	n_free -=
@@ -5145,6 +4887,85 @@ int yaffs_get_n_free_chunks(struct yaffs_dev *dev)
 		n_free = 0;
 
 	return n_free;
+}
+
+/*
+ * Marshalling functions to get the appropriate time values saved
+ * and restored to/from obj headers.
+ *
+ * Note that the WinCE time fields are used to store the 32-bit values.
+ */
+
+static void yaffs_oh_time_load(u32 *yst_time, u32 *win_time, YTIME_T timeval)
+{
+	u32 upper;
+	u32 lower;
+
+	lower = timeval & 0xffffffff;
+	/* we have to use #defines here insted of an if statement
+	otherwise the compiler throws an error saying that
+	right shift count >= width of type when we are using 32 bit time.
+	*/
+	#ifdef CONFIG_YAFFS_USE_32_BIT_TIME_T
+                upper = 0;
+        #else
+                upper = (timeval >> 32) & 0xffffffff;
+        #endif
+
+	*yst_time = lower;
+	win_time[0] = lower;
+	win_time[1] = upper;
+}
+
+static YTIME_T yaffs_oh_time_fetch(const u32 *yst_time, const u32 *win_time)
+{
+	u32 upper;
+	u32 lower;
+
+	if (win_time[1] == 0xffffffff) {
+		upper = 0;
+		lower = *yst_time;
+	} else {
+		upper = win_time[1];
+		lower = win_time[0];
+	}
+	if (sizeof(YTIME_T) > sizeof(u32)) {
+		u64 ret;
+		ret = (((u64)upper) << 32) | lower;
+		return (YTIME_T) ret;
+
+	} else
+		return (YTIME_T) lower;
+}
+
+YTIME_T yaffs_oh_ctime_fetch(struct yaffs_obj_hdr *oh)
+{
+	return yaffs_oh_time_fetch(&oh->yst_ctime, oh->win_ctime);
+}
+
+YTIME_T yaffs_oh_mtime_fetch(struct yaffs_obj_hdr *oh)
+{
+	return yaffs_oh_time_fetch(&oh->yst_mtime, oh->win_mtime);
+}
+
+YTIME_T yaffs_oh_atime_fetch(struct yaffs_obj_hdr *oh)
+{
+	return yaffs_oh_time_fetch(&oh->yst_atime, oh->win_atime);
+}
+
+void yaffs_oh_ctime_load(struct yaffs_obj *obj, struct yaffs_obj_hdr *oh)
+{
+	yaffs_oh_time_load(&oh->yst_ctime, oh->win_ctime, obj->yst_ctime);
+}
+
+void yaffs_oh_mtime_load(struct yaffs_obj *obj, struct yaffs_obj_hdr *oh)
+{
+	yaffs_oh_time_load(&oh->yst_mtime, oh->win_mtime, obj->yst_mtime);
+}
+
+void yaffs_oh_atime_load(struct yaffs_obj *obj, struct yaffs_obj_hdr *oh)
+{
+	yaffs_oh_time_load(&oh->yst_atime, oh->win_atime, obj->yst_atime);
 }
 
 

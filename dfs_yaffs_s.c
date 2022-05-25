@@ -4,6 +4,7 @@
 
 #include "yaffs/yaffs_guts.h"
 #include "yaffs/direct/yaffsfs.h"
+#include "yaffs/direct/yaffs_flashif.h"
 
 static int dfs_yfile_open(struct dfs_fd *file)
 {
@@ -19,7 +20,7 @@ static int dfs_yfile_open(struct dfs_fd *file)
     oflag = file->flags;
     if (oflag & O_DIRECTORY)
     {
-        yaffs_DIR * dir;
+        yaffs_DIR *dir;
         if (oflag & O_CREAT)
         {
             result = yaffs_mkdir_reldir(obj, file->path, 0x777);
@@ -147,11 +148,11 @@ static int dfs_yfile_lseek(struct dfs_fd *file, rt_off_t offset)
 static int dfs_yfile_getdents(struct dfs_fd *file, struct dirent *dirp, uint32_t count)
 {
     rt_uint32_t index;
-    struct dirent* d;
-    yaffs_DIR* dir;
-    struct yaffs_dirent * yaffs_d;
+    struct dirent *d;
+    yaffs_DIR *dir;
+    struct yaffs_dirent *yaffs_d;
 
-    dir = (yaffs_DIR*)(file->data);
+    dir = (yaffs_DIR *)(file->data);
     RT_ASSERT(dir != RT_NULL);
 
     /* make integer count, usually count is 1 */
@@ -193,75 +194,49 @@ static int dfs_yfile_getdents(struct dfs_fd *file, struct dirent *dirp, uint32_t
 
 static int dfs_yaffs_mount(struct dfs_filesystem *fs, unsigned long rwflag, const void *data)
 {
-    rt_mtd_t *mtd;
-    struct yaffs_dev *dev;
-    int ret;
+    if (yaffs_mount(fs->path) < 0)
+        return yaffsfs_GetLastError();
 
-    if (fs->dev_id->type != RT_Device_Class_MTD)
-        return -1;
-
-    mtd = (rt_mtd_t*)fs->dev_id;
-    if (!mtd || mtd->type != MTD_TYPE_NAND)
-        return -1;
-    if (!mtd->priv)
-        return -1;
-
-    dev = (struct yaffs_dev *)mtd->priv;
-    ret = yaffs_mount_reldev(dev);
-    if (ret == 0)
-    {
-        fs->data = dev->root_dir;
-    }
-
-    return ret;
+    return 0;
 }
 
 static int dfs_yaffs_unmount(struct dfs_filesystem *fs)
 {
-    rt_mtd_t *mtd;
-    struct yaffs_dev *dev;
-
-    mtd = (rt_mtd_t*)fs->dev_id;
-    dev = (struct yaffs_dev *)mtd->priv;
-
-    if (yaffs_unmount_reldev(dev) < 0)
+    if (yaffs_unmount(fs->path) < 0)
         return yaffsfs_GetLastError();
 
-    return -ENOENT;
+    return 0;
 }
 
 static int dfs_yaffs_mkfs(rt_device_t dev_id)
 {
-    rt_mtd_t *mtd;
-    struct yaffs_dev *dev;
-    extern int yaffs_format_reldev(struct yaffs_dev *dev,
-		                           int unmount_flag,
-		                           int force_unmount_flag,
-		                           int remount_flag);
+    extern int yaffs_format_reldev(struct yaffs_dev * dev,
+                                   int unmount_flag,
+                                   int force_unmount_flag,
+                                   int remount_flag);
 
-    if (dev_id->type != RT_Device_Class_MTD)
-        return -1;
+    rt_mtd_nand_t mtd;
 
-    mtd = (rt_mtd_t*)dev_id;
-    if (!mtd || mtd->type != MTD_TYPE_NAND)
-        return -1;
+    mtd = (rt_mtd_nand_t)dev_id;
+    RT_ASSERT(mtd);
+
     if (!mtd->priv)
         return -1;
 
-    dev = (struct yaffs_dev *)mtd->priv;
-
-    return yaffs_format_reldev(dev, 1, 1, 1);
+    return yaffs_format_reldev((struct yaffs_dev *)mtd->priv, 1, 1, 1);
 }
 
 static int dfs_yaffs_statfs(struct dfs_filesystem *fs, struct statfs *buf)
 {
-    rt_mtd_t * mtd = (rt_mtd_t *)fs->dev_id;
+    rt_mtd_nand_t mtd;
 
-    RT_ASSERT(mtd != RT_NULL);
+    RT_ASSERT(fs);
+    mtd = (rt_mtd_nand_t)fs->dev_id;
+    RT_ASSERT(mtd);
 
-    buf->f_bsize = mtd->sector_size;
-    buf->f_blocks = mtd->size/ mtd->sector_size;
-    buf->f_bfree = yaffs_freespace_reldev(mtd->priv) / mtd->sector_size;
+    buf->f_bsize = mtd->page_size;
+    buf->f_blocks = mtd->block_end - mtd->block_start;
+    buf->f_bfree = yaffs_freespace_reldev(yaffs_getdev(fs->path)) / mtd->page_size;
 
     return 0;
 }
@@ -338,10 +313,10 @@ static const struct dfs_file_ops _fops =
     RT_NULL, /* poll interface */
 };
 
-static const struct dfs_filesystem_ops _fsops =
+static const struct dfs_filesystem_ops dfs_yaffs_ops =
 {
     "yaffs",
-    DFS_FS_FLAG_DEFAULT,
+    DFS_FS_FLAG_FULLPATH,
     &_fops,
 
     dfs_yaffs_mount,
@@ -356,8 +331,9 @@ static const struct dfs_filesystem_ops _fsops =
 
 int dfs_yaffs_init(void)
 {
-    /* register fatfs file system */
+    /* Register yaffs file system */
 
-    return dfs_register(&_fsops);
+    yaffsfs_OSInitialisation();
+    return dfs_register(&dfs_yaffs_ops);
 }
 INIT_COMPONENT_EXPORT(dfs_yaffs_init);

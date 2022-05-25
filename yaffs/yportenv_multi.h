@@ -53,6 +53,8 @@
 #define YUCHAR unsigned char
 #define _Y(x)     x
 
+#define YTIME_T u64
+
 #define YAFFS_LOSTNFOUND_NAME		"lost+found"
 #define YAFFS_LOSTNFOUND_PREFIX		"obj"
 
@@ -61,10 +63,18 @@
 #define YAFFS_LOSTNFOUND_MODE		0700
 
 #if (LINUX_VERSION_CODE > KERNEL_VERSION(2, 5, 0))
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(4,12,0))
 #define Y_CURRENT_TIME CURRENT_TIME.tv_sec
+#else
+#define Y_CURRENT_TIME current_kernel_time().tv_sec
+#endif
 #define Y_TIME_CONVERT(x) (x).tv_sec
 #else
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(4,12,0))
 #define Y_CURRENT_TIME CURRENT_TIME
+#else
+#define Y_CURRENT_TIME current_kernel_time()
+#endif
 #define Y_TIME_CONVERT(x) (x)
 #endif
 

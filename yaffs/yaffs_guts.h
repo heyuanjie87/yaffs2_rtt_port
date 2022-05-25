@@ -125,7 +125,7 @@
 /* Special sequence number for bad block that failed to be marked bad */
 #define YAFFS_SEQUENCE_BAD_BLOCK	0xffff0000
 
-/* ChunkCache is used for short read/write operations.*/
+/* Chunk cache is used for short read/write operations.*/
 struct yaffs_cache {
 	struct yaffs_obj *object;
 	int chunk_id;
@@ -134,6 +134,13 @@ struct yaffs_cache {
 	int n_bytes;		/* Only valid if the cache is dirty */
 	int locked;		/* Can't push out or flush while locked. */
 	u8 *data;
+};
+
+struct yaffs_cache_manager {
+	struct yaffs_cache *cache;
+	int n_caches;
+	int cache_last_use;
+	int n_temp_buffers;
 };
 
 /* yaffs1 tags structures in RAM
@@ -347,6 +354,12 @@ struct yaffs_obj_hdr {
 
 	u32 yst_rdev;	/* stuff for block and char devices (major/min) */
 
+	/*
+	 * WinCE times are no longer just used to store WinCE times.
+	 * They are also used to store 64-bit times.
+	 * We actually store and read the times in both places and use
+	 * the best we can.
+	 */
 	u32 win_ctime[2];
 	u32 win_atime[2];
 	u32 win_mtime[2];
@@ -475,15 +488,17 @@ struct yaffs_obj {
 	YCHAR short_name[YAFFS_SHORT_NAME_LENGTH + 1];
 
 #ifdef CONFIG_YAFFS_WINCE
+	//these are always 64 bits
 	u32 win_ctime[2];
 	u32 win_mtime[2];
 	u32 win_atime[2];
 #else
-	u32 yst_uid;
-	u32 yst_gid;
-	u32 yst_atime;
-	u32 yst_mtime;
-	u32 yst_ctime;
+	//these can be 32 or 64 bits
+	YTIME_T yst_uid;
+	YTIME_T yst_gid;
+	YTIME_T yst_atime;
+	YTIME_T yst_mtime;
+	YTIME_T yst_ctime;
 #endif
 
 	u32 yst_rdev;
@@ -741,8 +756,7 @@ struct yaffs_dev {
 	int buffered_block;	/* Which block is buffered here? */
 	int doing_buffered_block_rewrite;
 
-	struct yaffs_cache *cache;
-	int cache_last_use;
+	struct yaffs_cache_manager cache_mgr;
 
 	/* Stuff for background deletion and unlinked files. */
 	struct yaffs_obj *unlinked_dir;	/* Directory where unlinked and deleted
@@ -885,6 +899,7 @@ struct yaffs_xattr_mod {
 
 int yaffs_guts_initialise(struct yaffs_dev *dev);
 void yaffs_deinitialise(struct yaffs_dev *dev);
+void yaffs_guts_cleanup(struct yaffs_dev *dev);
 
 int yaffs_get_n_free_chunks(struct yaffs_dev *dev);
 
@@ -1039,6 +1054,11 @@ loff_t yaffs_oh_to_size(struct yaffs_dev *dev, struct yaffs_obj_hdr *oh,
 			int do_endian);
 loff_t yaffs_max_file_size(struct yaffs_dev *dev);
 
+
+/* yaffs_wr_data_obj needs to be exposed to allow the cache to access it. */
+int yaffs_wr_data_obj(struct yaffs_obj *in, int inode_chunk,
+			     const u8 *buffer, int n_bytes, int use_reserve);
+
 /*
  * Debug function to count number of blocks in each state
  * NB Needs to be called with correct number of integers
@@ -1048,6 +1068,18 @@ void yaffs_count_blocks_by_state(struct yaffs_dev *dev, int bs[10]);
 
 int yaffs_find_chunk_in_file(struct yaffs_obj *in, int inode_chunk,
 				    struct yaffs_ext_tags *tags);
+
+/*
+ *Time marshalling functions
+ */
+
+YTIME_T yaffs_oh_ctime_fetch(struct yaffs_obj_hdr *oh);
+YTIME_T yaffs_oh_mtime_fetch(struct yaffs_obj_hdr *oh);
+YTIME_T yaffs_oh_atime_fetch(struct yaffs_obj_hdr *oh);
+
+void yaffs_oh_ctime_load(struct yaffs_obj *obj, struct yaffs_obj_hdr *oh);
+void yaffs_oh_mtime_load(struct yaffs_obj *obj, struct yaffs_obj_hdr *oh);
+void yaffs_oh_atime_load(struct yaffs_obj *obj, struct yaffs_obj_hdr *oh);
 
 /*
  * Define LOFF_T_32_BIT if a 32-bit LOFF_T is being used.

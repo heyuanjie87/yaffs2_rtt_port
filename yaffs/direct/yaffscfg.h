@@ -24,11 +24,18 @@
 
 #include "yportenv.h"
 
+#ifdef CONFIG_YAFFS_SMALL_RAM
 #define YAFFSFS_N_HANDLES	10
-
-#define YAFFSFS_N_DSC		10
+#define YAFFSFS_N_DSC		2
+#else
+#define YAFFSFS_N_HANDLES	100
+#define YAFFSFS_N_DSC		20
+#endif
 
 #define LOFF_T_32_BIT
+
+typedef signed long      off_t;
+typedef int              mode_t;
 
 struct yaffsfs_DeviceConfiguration {
 	const YCHAR *prefix;
