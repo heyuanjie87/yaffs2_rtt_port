@@ -16,6 +16,7 @@
 #ifndef __YPORTENV_H__
 #define __YPORTENV_H__
 
+#include <sys/fcntl.h>
 #include <rtthread.h>
 #include <rtdevice.h>
 
