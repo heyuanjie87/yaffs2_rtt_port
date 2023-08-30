@@ -35,7 +35,6 @@
 #define LOFF_T_32_BIT
 
 typedef signed long      off_t;
-typedef int              mode_t;
 
 struct yaffsfs_DeviceConfiguration {
 	const YCHAR *prefix;
